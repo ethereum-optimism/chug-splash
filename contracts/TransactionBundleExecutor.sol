@@ -59,6 +59,15 @@ contract TransactionBundleExecutor {
         owner = _owner;
     }
 
+    function hasActiveBundle()
+        public
+        returns (
+            bool
+        )
+    {
+        return nextTransactionHash != BUNDLE_TERMINATING_HASH;
+    }
+
     /**
      * Sets the parent transaction bundle hash. Only callable by the owner of this contract. Can
      * only be called once the previous bundle has been fully executed.
@@ -72,7 +81,7 @@ contract TransactionBundleExecutor {
         onlyOwner
     {
         require(
-            nextTransactionHash == BUNDLE_TERMINATING_HASH,
+            hasActiveBundle() == false,
             "TransactionBundleExecutor: previous bundle has not yet been fully executed"
         );
 
@@ -99,6 +108,11 @@ contract TransactionBundleExecutor {
     )
         public
     {
+        require(
+            hasActiveBundle() == true,
+            "TransactionBundleExecutor: there is no active bundle"
+        );
+
         // Make sure the user has provided enough gas to perform this action successfully.
         require(
             gasleft() > _gasLimit,

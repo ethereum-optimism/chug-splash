@@ -2,6 +2,7 @@
 import { HardhatRuntimeEnvironment } from 'hardhat/types'
 import { Contract, ContractFactory, ethers } from 'ethers'
 import { sleep } from '@eth-optimism/core-utils'
+import { Signer } from '@ethersproject/abstract-signer'
 
 /* Imports: Internal */
 import {
@@ -18,9 +19,11 @@ import {
  * TransactionBundleExecutor contract.
  * @returns TransactionBundlExecutor factory.
  */
-export const getTransactionExecutorFactory = (): ContractFactory => {
+export const getTransactionExecutorFactory = (
+  signer?: Signer
+): ContractFactory => {
   const artifact = require('./artifacts/contracts/TransactionBundleExecutor.sol/TransactionBundleExecutor.json')
-  return new ContractFactory(artifact.abi, artifact.bytecode)
+  return new ContractFactory(artifact.abi, artifact.bytecode, signer)
 }
 
 export const makeRawTransactions = async (
@@ -128,4 +131,25 @@ export const waitForBundleApproval = async (
 
     await sleep(5000)
   }
+}
+
+export const makeTextBoxy = (text: string): string => {
+  const longestLineLength = text
+    .split('\n')
+    .reduce((prevLongestLineLength, currentLine) => {
+      if (currentLine.length > prevLongestLineLength) {
+        return currentLine.length
+      } else {
+        return prevLongestLineLength
+      }
+    }, 0)
+
+  const lines = []
+  lines.push(`**${'*'.repeat(longestLineLength)}**`)
+  for (const line of text.split('\n')) {
+    lines.push(`* ${line.padEnd(longestLineLength, ' ')} *`)
+  }
+  lines.push(`**${'*'.repeat(longestLineLength)}**`)
+
+  return lines.join('\n')
 }

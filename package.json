@@ -26,6 +26,7 @@
     "clean": "rimraf hardhat *.d.ts *.map *.js tsconfig.tsbuildinfo artifacts cache"
   },
   "peerDependencies": {
+    "@ethersproject/abstract-signer": "^5",
     "@nomiclabs/hardhat-ethers": "^2",
     "ethers": "^5",
     "hardhat": "^2"
@@ -36,6 +37,7 @@
   },
   "devDependencies": {
     "@eth-optimism/dev": "^1.1.1",
+    "@ethersproject/abstract-signer": "^5.0.14",
     "@nomiclabs/hardhat-ethers": "^2.0.2",
     "ethers": "^5.0.32",
     "hardhat": "^2.1.2"

@@ -134,7 +134,14 @@ task(TASK_CHUGSPLASH_APPROVE)
     const executor = await hre.run(TASK_CHUGSPLASH_GET_EXECUTOR, args)
     const bundle = await hre.run(TASK_CHUGSPLASH_BUNDLE, args)
 
-    await executor.approveTransactionBundle(bundle.hash)
+    console.log(`Approving transaction bundle.`)
+    console.log(`Submitting approval transaction...`)
+    const result = await executor.approveTransactionBundle(bundle.hash)
+    console.log(`Submitted approval transaction.`)
+    console.log(`Transaction hash: ${result.hash}`)
+    console.log(`Waiting for transaction to be mined...`)
+    await result.wait()
+    console.log(`Transaction mined. All done!`)
   })
 
 task(TASK_CHUGSPLASH_DISPLAY_DEPLOYMENT)
@@ -259,18 +266,31 @@ task(TASK_CHUGSPLASH_EXECUTE)
       args
     )
 
-    // first, check to see if we're in the bundle by searching for the current bundle hash.
-    const nextTransactionHash = await executor.nextTransactionHash()
-    let nextTransactionIndex = -1
-    for (let i = 0; i < bundle.transactions.length; i++) {
-      const tx = bundle.transactions[i]
-      const txHash = getTransactionHash(tx)
-      if (txHash === nextTransactionHash) {
-        nextTransactionIndex = i
+    // how to handle nonce changes?
+    const getNextTransactionIndex = async (): Promise<number> => {
+      // first, check to see if we're in the bundle by searching for the current bundle hash.
+      const nextTransactionHash = await executor.nextTransactionHash()
+      console.log(nextTransactionHash)
+      let index = -1
+      for (let i = 0; i < bundle.transactions.length; i++) {
+        const tx = bundle.transactions[i]
+        const txHash = getTransactionHash(tx)
+        console.log(txHash)
+        if (txHash === nextTransactionHash) {
+          index = i
+        }
       }
+      return index
     }
 
-    // if we aren't in the right bundle, let the user know and exit
+    // main problem here is that we need to use the correct nonce
+
+    // user starts trying to send transactions
+    // > in the future we could consider adding some sort of "lock" to this; not sure.
+    // > could possibly also ask that the user give expected next tx hash to reduce gas cost.
+    // TODO: a LOT of error handling here
+    let backoff = 0
+    let nextTransactionIndex = await getNextTransactionIndex()
     if (nextTransactionIndex === -1) {
       console.log(
         `Provided deployment is not active. Are you sure you have the right deployment?`
@@ -278,75 +298,66 @@ task(TASK_CHUGSPLASH_EXECUTE)
       return
     }
 
-    // user starts trying to send transactions
-    // > in the future we could consider adding some sort of "lock" to this; not sure.
-    // > could possibly also ask that the user give expected next tx hash to reduce gas cost.
-    // TODO: a LOT of error handling here
-    let backoff = 0
     while (nextTransactionIndex < bundle.transactions.length) {
-      const tx = bundle.transactions[nextTransactionIndex]
-      if (backoff > 0) {
-        console.log(`Backing off, will wait ${backoff}ms`)
-        await sleep(backoff)
-      }
-
-      console.log(
-        `Attempting to execute bundle transaction #${nextTransactionIndex + 1}`
-      )
-      const nextTransactionHash = await executor.nextTransactionHash()
-      const thisTransactionHash = getTransactionHash(tx)
-      if (nextTransactionHash !== thisTransactionHash) {
-        console.log(nextTransactionHash)
-        console.log(thisTransactionHash)
-        // console.log(
-        //   `Transaction was already executed by somebody else. Skipping.`
-        // )
-        // nextTransactionIndex += 1
-        // continue
+      // if we aren't in the right bundle, let the user know and exit
+      if (nextTransactionIndex === -1) {
+        console.log(`Deployment has been successfully executed.`)
+        break
       }
 
       try {
-        console.log(`Submitting transaction...`)
-        const result = await executor.executeTransaction(
-          tx.nextTransactionHash,
-          tx.isCreate,
-          tx.target,
-          tx.gasLimit,
-          tx.data,
-          {
-            gasLimit: tx.gasLimit + 100_000,
-          }
-        )
-        console.log(`Submitted transaction.`)
-        console.log(`Transaction hash: ${result.hash}`)
-        console.log(`Waiting for transaction to be mined...`)
-        await result.wait()
-        console.log(`Transaction mined!`)
-        nextTransactionIndex += 1
-      } catch (err) {
-        backoff += (backoff + Math.floor(Math.random() * 5000)) * 2
+        const tx = bundle.transactions[nextTransactionIndex]
 
-        if (
-          err.message.includes(
-            'TransactionBundleExecutor: there is no active bundle'
+        console.log(
+          `Attempting to execute bundle transaction #${
+            nextTransactionIndex + 1
+          }`
+        )
+        try {
+          console.log(`Submitting transaction...`)
+          const result = await executor.executeTransaction(
+            tx.nextTransactionHash,
+            tx.isCreate,
+            tx.target,
+            tx.gasLimit,
+            tx.data,
+            {
+              gasLimit: tx.gasLimit + 100_000,
+            }
           )
-        ) {
+          console.log(`Submitted transaction.`)
+          console.log(`Transaction hash: ${result.hash}`)
+          console.log(`Waiting for transaction to be mined...`)
+          await result.wait()
+          console.log(`Transaction mined!`)
+          backoff = 0
+        } catch (err) {
+          backoff += backoff * 2 + 30000 + Math.floor(Math.random() * 15000)
           console.log(
-            `Transaction was executed by someone else before we could execute it. Moving on.`
+            `Transaction execution failed. Someone else probably executed this transaction already.`
           )
-          nextTransactionIndex += 1
-          continue
-        } else {
+        }
+      } catch (err) {
+        // todo: catch here?
+        throw err
+      } finally {
+        const prevTransactionIndex = nextTransactionIndex
+        nextTransactionIndex = await getNextTransactionIndex()
+        if (nextTransactionIndex !== prevTransactionIndex + 1) {
+          console.log(`Transaction index did not increment after transaction.`)
           console.log(
-            `Transaction went wrong but couldn't figure out why. Trying again.`
+            `Waiting 30 seconds to attempt to self-correct, then will continue.`
           )
-          continue
+          await sleep(30000)
+        }
+
+        if (backoff > 0) {
+          console.log(`Backing off, will wait ${backoff}ms`)
+          await sleep(backoff)
         }
       }
     }
 
-    // if the user's transction fails, back off for a brief random period of time
-    // keep submitting transactions to the end
     // by default, write artifacts after the deploy
   })
 

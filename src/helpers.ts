@@ -29,9 +29,14 @@ export const getTransactionExecutorFactory = (
 export const makeRawTransactions = async (
   hre: HardhatRuntimeEnvironment & { ethers: any },
   transactions: BundleTransaction[],
-  executor: string
+  executor: Contract
 ): Promise<RawBundleTransaction[]> => {
-  let nonce = await hre.ethers.provider.getTransactionCount(executor)
+  let nonce: number
+  if (await executor.hasActiveBundle()) {
+    nonce = await executor.getActiveBundleNonce()
+  } else {
+    nonce = await hre.ethers.provider.getTransactionCount(executor.address)
+  }
 
   const raw = []
   const contracts = {}
@@ -51,7 +56,7 @@ export const makeRawTransactions = async (
       const factory = await hre.ethers.getContractFactory(tx.contract)
       const data = factory.getDeployTransaction(...args).data
       const address = hre.ethers.utils.getContractAddress({
-        from: executor,
+        from: executor.address,
         nonce: nonce,
       })
 

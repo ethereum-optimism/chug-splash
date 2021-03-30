@@ -1,5 +1,12 @@
 # chugsplash
 
+## >> big red warning sign <<
+This code is a work in progress.
+It is not even close to ready.
+But we're working on it in the open because it's fun to do.
+We'll update this with relevant install information once an actual release has been published.
+
+## What is chugsplash?
 `chugsplash` is a smart contract deployment system that attempts to optimize for security and usibility.
 At the core of `chugsplash` is the idea that a deployment or upgrade should take the form of a single atomic action.
 This ideology asks that developers design their deployments carefully and deliberately.

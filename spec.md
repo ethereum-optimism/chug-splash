@@ -1,176 +1,189 @@
-# The chugsplash spec
+# the chugsplash spec
 
-this is also a work in progress, but i am required to do it so i will do it!
+## goals
 
-This is the spec for `chugsplash`, a smart contract deployment system.
-Smart contract deployment systems are hard.
-Solutions to hard problems need specs!
+1. Create a deployment system that:
+    1. Makes deployments easy to design and parse.
+    2. Makes deployments easy to secure.
+    3. Makes deployments easy to track.
 
-## Transaction bundle executor
-The `TransactionBundleExecutor` is the solidity smart contract that makes `chugsplash` possible.
-The contract's name is pretty descriptive, it's a contract that makes it possible to execute bundles of transactions.
-What is a transaction bundle?
-A transaction bundle is a series of transactions that are executed by the contract (hence the name).
+## components high level
 
-Each transaction can either be a CALL or a CREATE which pretty much allows you do do anything.
-Transactions consist of the following fields:
-1. `bool isCreate`: If true, this action is a contract creation. If false, this is a contract call.
-2. `address target`: Contract to interact with. If `isCreate` is true then this field is ignored.
-3. `uint256 gasLimit`: Gas to provide to this transaction.
-4. `bytes data`: Data to send to the target contract or initcode if creating a new contract.
-5. `bytes32 nextTransactionHash`: Hash of the next transaction (this is important).
+1. The `DeploymentManager`, a smart contract that allows an address to authorize the execution of a series of actions (one of contract creation or contract interaction).
+2. A basic JSON file structure for defining a series of actions for the `DeploymentManager` to take (+ the tooling to interact with this structure).
+3. A workflow for generating, reviewing, and approving a bundle of actions.
+4. A system for reliably executing actions once they have been approved.
 
-Here's the same thing as a TypeScript-like interfcace:
+## code reference
+
+### functions we assume exist
 
 ```ts
-interface BundledTransaction {
+function getContractInitcode(contract: string, arguments: any[]): bytes
+```
+
+```ts
+function getCreate2Address(creator: address, initcode: bytes, salt: bytes32): address
+```
+
+```ts
+function keccak256(input: bytes): bytes32
+```
+
+```ts
+function solidityAbiEncode(input: any): bytes
+```
+
+```ts
+function abiEncodeFunctionData(function: string, arguments: any[]): bytes
+```
+
+### core stuff
+
+```ts
+interface ChugSplashAction {
     isCreate: bool
     target: address
-    gasLimit: number
+    gas: number
     data: bytes
-    nextTransactionHash: bytes32
 }
 ```
 
-The first four fields are relatively self-explanatory.
-`nextTransactionHash` is a hash of the next transaction in the bundle to be executed.
-This is what makes the bundle work.
-Once a transaction is processed, we store this reference to the next transaction.
-When someone attempts to execute a transaction, we verify that the hash of the thing they're trying to execute matches the `nextTransactionHash` provided by the previous transaction.
-
-The function to compute the hash of a transaction is:
 ```ts
-const computeTransactionHash = (
-    transaction: BundledTransaction
-): bytes32 => {
+interface BundledChugSplashAction extends ChugSplashAction {
+    nextBundledActionHash: bytes32
+}
+```
+
+```ts
+function hash(bundledAction: BundledChugSplashAction): bytes32 {
     return keccak256(
-        abiEncode(
-            transaction.isCreate
-            transaction.target
-            transaction.gasLimit
-            transaction.data
-            transaction.nextTransactionHash
-        )
+        solidityAbiEncode([
+            bundledAction.isCreate,
+            bundledAction.target,
+            bundledAction.gas,
+            bundledAction.data,
+            bundledAction.nextActionHash
+        ])
     )
 }
 ```
 
-Then there's a function on the `TransactionBundleExecutor` that allows you to execute a transaction:
+```ts
+function bundle(actions: ChugSplashAction[]): BundledChugSplashAction[] {
+    // 0xFFFF.... is the bundle terminating hash.
+    let nextBundledActionHash = "0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF"
 
-```solidity
-function executeBundledTransaction(
-    BundledTransaction memory transaction
-) public {
-    ...
+    let bundledActions = []
+    // We have to bundle in reverse because the last action needs to be the bottom element of the
+    // hash onion and must therefore have the 0xFFFF.... hash.
+    for (const action of actions.reverse()) {
+        const bundledAction = {
+            isCreate: action.isCreate,
+            target: action.target,
+            gas: action.gas,
+            data: action.data,
+            nextBundledActionHash: nextBundledActionHash
+        }
+
+        bundledActions.push(bundledAction)
+        // Now we hash the action and use that as the nextBundledActionHash for the next action.
+        nextBundledActionHash = hash(bundledAction)
+    }
+
+    // Finally re-reverse it so it's back in the original action order.
+    return bundledActions.reverse()
 }
 ```
 
-Transaction bundles are basically just a collection of these `BundledTransaction` objects.
-Every bundle starts by making a list of these things, where the order of the list is the order in which the transactions will be executed.
-Here's an example:
-
 ```ts
-const bundle: BundledTransaction[] = [
-    {
-        target: null, // this will be a contract creation
-        gasLimit: 1000000,
-        data: "0x1234123412341234123412341234" // init code
-    },
-    {
-        target: "0x1111111111111111111111111111111111111111", // but this is a contract call
-        gasLimit: 250000,
-        data: "0x5432543254325432"
-    },
-    ... // and so on
-]
-```
-
-This clearly isn't very useful to humans because humans can't read bytecode.
-Still, it's the basic transaction structure that we need at a lower level.
-
-
-## Deployment definition files
-`chugsplash` deployments are defined by clear deployment json files.
-Deployment files can be described by the following TypeScript interface:
-
-```ts
-interface DeploymentDefinition {
-    nonce: number
-    transactions: Array<DeployTransaction | CallTransaction>
-}
-```
-
-All deployments **must** have a `nonce` which dictates exactly when a particular deployment can be executed.
-The deployment with nonce `n` **cannot** be executed until the deployment with nonce `n-1` has been fully executed.
-This holds true for all `n` except for the first deployment which must have a nonce `n=1` and can be executed at any time.
-
-The `TransactionBundleExecutor` can take two possible actions, deployments or contract interactions.
-This is reflected in the `transactions` field of the deployment definition, which must either be a `DeployTransaction` or a `CallTransaction`.
-
-A `DeployTransaction` takes the form:
-
-```ts
-interface DeployTransaction {
-    action: "deploy"
-    contract: string // NAME of the contract to deploy
+interface CreateActionDef {
+    action: "create"
+    contract: string
     nickname: string
-    gasLimit: number
+    gas: number
     arguments: any[]
 }
 ```
 
-A `CallTransaction` takes the form:
-
 ```ts
-interface CallTransaction {
+interface CallActionDef {
     action: "call"
-    target: string // NAME of the contract to call
-    gasLimit: number
+    contract: string
+    gas: number
     function: string
     arguments: any[]
 }
 ```
 
-**Note** that all fields in these two transaction types are required.
-This is done explicitly to avoid any sort of confusion or uncertainty.
-Chugsplash *will* complain and throw errors if you don't fill in every relevant field
+```ts
+interface ChugSplashActionBundleDef {
+    nonce: number
+    actions: Array<CreateActionDef | CallActionDef>
+    declarations: {
+        [contract: string]: address
+    }
+}
+```
 
-Here's an example json deployment file:
+```ts
+function bundleFromDef(
+    bundleDef: ChugSplashActionBundleDef,
+    deploymentManager: address
+): BundledChugSplashAction[] {
+    const declarations = bundleDef.declarations
 
-```json
-{
-    "nonce": 1,
-    "transactions": [
-        [
-            {
-                "action": "deploy",
-                "contract": "MyContract",
-                "nickname": "MyContract-1",
-                "gasLimit": 4000000,
-                "arguments": []
-            },
-            {
-                "action": "deploy",
-                "contract": "MyContractWithArgs",
-                "nickname": "MyContractWithArgs-1",
-                "gasLimit": 4000000,
-                "arguments": [
-                    1234,
-                    "some string argument",
-                ]
-            },
-            {
-                "action": "call",
-                "target": "MyContract-1",
-                "function": "myContractFunction",
-                "gasLimit": 4000000,
-                "arguments": [
-                    5678,
-                    "use templates to refer to previous deployments:",
-                    "{MyContract-1}.address"
-                ]
+    let deployCount = 0
+    let actions: ChugSplashAction = []
+    for (const actionDef of bundleDef.actions) {
+        // Simple templating, $NICKNAME resolves to address of contract with nickname==NICKNAME.
+        const arguments = []
+        for (const argument of actionDef.arguments) {
+            if (typeof argument === "string" && argument[0] === "$") {
+                arguments.push(declarations[argument[1:]])
+            } else {
+                arguments.push(argument)
             }
-        ]
-    ]
+        }
+
+        if (actionDef.action === "deploy") {
+            // Must make sure to increase the deploy count. Used to determine contract addresses.
+            deployCount++
+
+            // Compute deployment initcode using ABI + arguments.
+            const data = getContractInitcode(actionDef.contract, actionDef.arguments)
+
+            // Compute address. DeploymentManager will use CREATE2 matching this definition:
+            declarations[actionDef.nickname] = getCreate2Address(
+                deploymentManager,
+                data,
+                keccak256(
+                    solidityAbiEncode([
+                        bundleDef.nonce,
+                        deployCount
+                    ])
+                )
+            )
+
+            actions.push({
+                isCreate: true,
+                target: "0x0000000000000000000000000000000000000000",
+                gas: actionDef.gas,
+                data: data,
+            })
+        } else if (actionDef.action === "call") {
+            // Compute data using ABI + arguments.
+            const data = abiEncodeFunctionData(actionDef.function, actionDef.args)
+
+            actions.push({
+                isCreate: false,
+                target: bundleDef.delcarations[actionDef.contract],
+                gas: actionDef.gas,
+                data: data,
+            })
+        }
+    }
+
+    return bundle(actions)
 }
 ```

@@ -69,7 +69,7 @@ export const makeRawTransactions = async (
       })
     } else if (isCallTransaction(tx)) {
       const contract = contracts[tx.target]
-      const data = contract.interface.encodeFunctionData(tx.function, args)
+      const data = contract.interface.encodeFunctionData(tx.function, args) 
 
       raw.push({
         to: contract.address,
